@@ -1,0 +1,79 @@
+name: Собрать APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Разложить файлы по папкам
+        run: |
+          mkdir -p src/main/java src/main/res/drawable
+          cp AndroidManifest.xml src/main/
+          cp App.java src/main/java/
+          cat > src/main/res/drawable/ic_snow.xml <<'XML'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:strokeColor="#FFFFFFFF"
+                  android:strokeWidth="1.8"
+                  android:strokeLineCap="round"
+                  android:pathData="M12,2.5L12,21.5M3.8,7.25L20.2,16.75M3.8,16.75L20.2,7.25M9.5,4L12,6.2L14.5,4M9.5,20L12,17.8L14.5,20M4.3,10.3L7.5,9.2L6.8,5.9M19.7,13.7L16.5,14.8L17.2,18.1M4.3,13.7L7.5,14.8L6.8,18.1M19.7,10.3L16.5,9.2L17.2,5.9" />
+          </vector>
+          XML
+          cat > src/main/res/drawable/ic_launcher.xml <<'XML'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#4B3FC4"
+                  android:pathData="M54,4a50,50 0,1 1,0 100a50,50 0,1 1,0 -100z" />
+              <path
+                  android:fillColor="#7A5CFF"
+                  android:pathData="M54,14a40,40 0,1 1,0 80a40,40 0,1 1,0 -80z" />
+              <group
+                  android:scaleX="2.6"
+                  android:scaleY="2.6"
+                  android:translateX="22.8"
+                  android:translateY="22.8">
+                  <path
+                      android:strokeColor="#FFFFFFFF"
+                      android:strokeWidth="1.8"
+                      android:strokeLineCap="round"
+                      android:pathData="M12,2.5L12,21.5M3.8,7.25L20.2,16.75M3.8,16.75L20.2,7.25M9.5,4L12,6.2L14.5,4M9.5,20L12,17.8L14.5,20M4.3,10.3L7.5,9.2L6.8,5.9M19.7,13.7L16.5,14.8L17.2,18.1M4.3,13.7L7.5,14.8L6.8,18.1M19.7,10.3L16.5,9.2L17.2,5.9" />
+              </group>
+          </vector>
+          XML
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Сборка APK
+        run: |
+          gradle assembleDebug --no-daemon
+          cp build/outputs/apk/debug/*.apk Snezhok.apk
+
+      - name: Выложить APK в Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete snezhok --yes --cleanup-tag || true
+          gh release create snezhok Snezhok.apk --title "Снежок APK" --notes "Скачай Snezhok.apk и установи"
