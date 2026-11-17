@@ -1,4 +1,4 @@
-name: Собрать APK
+name: .github/workflows/build.yml
 
 on:
   push:
