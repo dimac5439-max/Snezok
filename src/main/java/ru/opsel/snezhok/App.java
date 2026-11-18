@@ -134,10 +134,18 @@ public final class App {
         float level = 1f, tiltT = 0f;
         String say;
         float sayT;
+        boolean thrown;      // брошен сильно: разобьётся при ударе
+        boolean dead;        // рассыпался, окно уберём в конце кадра
+        int look = -1;       // что нарисовано в окне сейчас (лицо, туловище)
+        RadialGradient shade;
+        float shadeR;
         ToyView view;
         WindowManager.LayoutParams lp;
         int winW, winH, lastX = Integer.MIN_VALUE, lastY = Integer.MIN_VALUE;
     }
+
+    /** Скорость броска, после которой снежок разбивается при ударе. */
+    static final float THROW_SPEED = 1300, BREAK_SPEED = 650;
 
     /** Рисует снежок вместе с лицом, пуговицами, руками и шапкой. Центр в (cx, cy). */
     static void drawBall(Canvas c, Toy t, float cx, float cy, Paint p, Path path) {
@@ -155,9 +163,17 @@ public final class App {
             }
             p.setStyle(Paint.Style.FILL);
         }
-        p.setShader(new RadialGradient(cx - r * 0.35f, cy - r * 0.4f, r * 1.2f,
-                new int[]{0xFFFFFFFF, 0xFFEEF1FF, 0xFFB6C0EE}, new float[]{0f, 0.6f, 1f}, Shader.TileMode.CLAMP));
-        c.drawCircle(cx, cy, r, p);
+        // шейдер создаётся один раз на размер шарика, а не на каждый кадр
+        if (t.shade == null || Math.abs(t.shadeR - r) > 0.75f) {
+            t.shade = new RadialGradient(-r * 0.35f, -r * 0.4f, r * 1.2f,
+                    new int[]{0xFFFFFFFF, 0xFFEEF1FF, 0xFFB6C0EE}, new float[]{0f, 0.6f, 1f}, Shader.TileMode.CLAMP);
+            t.shadeR = r;
+        }
+        p.setShader(t.shade);
+        c.save();
+        c.translate(cx, cy);
+        c.drawCircle(0, 0, r, p);
+        c.restore();
         p.setShader(null);
         if (t.body > 0) {
             p.setColor(0xFF222222);
@@ -205,6 +221,7 @@ public final class App {
         final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         final Path path = new Path();
         final RectF rf = new RectF();
+        final Shader bodyShader, capShader;
         float gdx, gdy, downX, downY, svx, svy;
         long downT, lastT;
         boolean moved;
@@ -215,7 +232,15 @@ public final class App {
             this.owner = owner;
             d = getResources().getDisplayMetrics().density;
             p.setTextAlign(Paint.Align.CENTER);
+            float w = 30 * d;
+            bodyShader = new LinearGradient(-w / 2, 0, w / 2, 0,
+                    new int[]{0xFF9E1626, 0xFFE8303F, 0xFFFF6A75, 0xFFC81E2E, 0xFF8A1220},
+                    new float[]{0f, 0.3f, 0.45f, 0.7f, 1f}, Shader.TileMode.CLAMP);
+            capShader = new LinearGradient(-w / 2, 0, w / 2, 0, 0xFF8E949E, 0xFFE9ECF1, Shader.TileMode.MIRROR);
         }
+
+        @Override
+        public boolean hasOverlappingRendering() { return false; }
 
         @Override
         protected void onDraw(Canvas c) {
@@ -262,9 +287,7 @@ public final class App {
             c.rotate(tilt);
             // корпус
             rf.set(-w / 2, -h / 2 + 4 * d, w / 2, h / 2);
-            p.setShader(new LinearGradient(-w / 2, 0, w / 2, 0,
-                    new int[]{0xFF9E1626, 0xFFE8303F, 0xFFFF6A75, 0xFFC81E2E, 0xFF8A1220},
-                    new float[]{0f, 0.3f, 0.45f, 0.7f, 1f}, Shader.TileMode.CLAMP));
+            p.setShader(bodyShader);
             c.drawRoundRect(rf, 5 * d, 5 * d, p);
             p.setShader(null);
             // белая волна
@@ -281,7 +304,7 @@ public final class App {
             p.setTypeface(Typeface.DEFAULT_BOLD);
             c.drawText("COLA", 0, -6 * d, p);
             // крышка
-            p.setShader(new LinearGradient(-w / 2, 0, w / 2, 0, 0xFF8E949E, 0xFFE9ECF1, Shader.TileMode.MIRROR));
+            p.setShader(capShader);
             rf.set(-w / 2 + 2 * d, -h / 2, w / 2 - 2 * d, -h / 2 + 6 * d);
             c.drawRoundRect(rf, 3 * d, 3 * d, p);
             p.setShader(null);
@@ -314,6 +337,7 @@ public final class App {
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     t.held = true;
+                    t.thrown = false;
                     t.vx = t.vy = 0;
                     svx = svy = 0;
                     gdx = rx - owner.ox - t.x;
@@ -346,6 +370,7 @@ public final class App {
                         float lim = 2200 * d;
                         t.vx = Math.max(-lim, Math.min(lim, svx));
                         t.vy = Math.max(-lim, Math.min(lim, svy));
+                        if (t.type == Toy.BALL && Math.hypot(t.vx, t.vy) > THROW_SPEED * d) t.thrown = true;
                     }
                     return true;
             }
@@ -359,6 +384,36 @@ public final class App {
     // =====================================================================
     // Главный слой: снег, сугроб, гирлянда, экскаваторы. Касания проходят сквозь него.
     // =====================================================================
+    /**
+     * Прозрачная полоска над сугробом: ловит касания, чтобы сгребать снег в снежок.
+     * Есть только там и тогда, где лежит снег, и её можно выключить.
+     */
+    public static class RakeView extends View {
+        final SnowView owner;
+        private ToyView target;   // касание пришлось на снежок или колу: отдаём его им
+
+        RakeView(Context c, SnowView owner) {
+            super(c);
+            this.owner = owner;
+            setWillNotDraw(true);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent e) {
+            if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                Toy t = owner.toyAt(e.getRawX() - owner.ox, e.getRawY() - owner.oy);
+                target = t != null ? t.view : null;
+            }
+            boolean r = target != null ? target.onTouchEvent(e) : owner.onRake(e);
+            int a = e.getActionMasked();
+            if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) target = null;
+            return r;
+        }
+
+        @Override
+        public boolean performClick() { return super.performClick(); }
+    }
+
     static final class Exc {
         float x, load, t, wheel;
         int dir;
@@ -412,6 +467,17 @@ public final class App {
         final ArrayList<Toy> toys = new ArrayList<>();
         private final ArrayList<Exc> excs = new ArrayList<>();
 
+        // лепка снежка из сугроба
+        private static final int MAX_BALLS = 8;
+        private final Toy rake = new Toy();
+        private boolean raking = false;
+        private float rakeVol, rakeFx, rakeFy, rakeSvx, rakeSvy, rakePrevX;
+        private long rakeLastT;
+        private RakeView rakeView;
+        private WindowManager.LayoutParams rakeLp;
+        private int rakeH = 0;
+        private boolean busy = true;
+
         public SnowView(Context c, WindowManager wm) {
             super(c);
             this.wm = wm;
@@ -447,6 +513,10 @@ public final class App {
             invalidate();
         }
 
+        // Прозрачность применяется к каждому рисунку отдельно, без лишнего слоя на весь экран
+        @Override
+        public boolean hasOverlappingRendering() { return false; }
+
         void start() {
             if (running) return;
             running = true;
@@ -461,9 +531,15 @@ public final class App {
 
         @Override
         protected void onSizeChanged(int w, int h, int ow, int oh) {
+            boolean first = ow == 0 && oh == 0;
             float[] np = new float[(int) (w / col) + 2];
             for (int i = 0; i < np.length && i < pile.length; i++) np[i] = pile[i];
             pile = np;
+            if (first && pileOn) {
+                // немного снега уже лежит, чтобы сразу было из чего лепить
+                for (int i = 0; i < pile.length; i++)
+                    pile[i] = (9 + (float) Math.sin(i * 0.11) * 3 + (float) Math.sin(i * 0.37) * 1.5f) * d;
+            }
             pileP.setShader(new LinearGradient(0, h - cap, 0, h, 0xFFFFFFFF, 0xFFD9E0FF, Shader.TileMode.CLAMP));
             if (n == 0 && snowOn) {
                 int target = LEVELS[level];
@@ -472,6 +548,7 @@ public final class App {
             }
             updateOffset();
             if (needSync) { needSync = false; syncToys(); }
+            updateRakeWindow();
         }
 
         private void updateOffset() {
@@ -487,19 +564,9 @@ public final class App {
             boolean hasBall = false, hasCola = false;
             for (Toy t : toys) { if (t.type == Toy.BALL) hasBall = true; else hasCola = true; }
             float W = getWidth(), H = getHeight();
-            if (ballsOn && !hasBall) {
-                float[] rs = {34, 26, 19};
-                float[] xs = {0.22f, 0.42f, 0.6f};
-                for (int i = 0; i < 3; i++) {
-                    Toy t = new Toy();
-                    t.type = Toy.BALL;
-                    t.r = t.hw = t.hh = rs[i] * d;
-                    t.x = W * xs[i];
-                    t.y = H * 0.45f;
-                    addToy(t);
-                }
-            }
+            // снежки больше не появляются сами: их лепят из сугроба
             if (!ballsOn && hasBall) removeToys(Toy.BALL);
+            updateRakeWindow();
             if (colaOn && !hasCola) {
                 Toy t = new Toy();
                 t.type = Toy.COLA;
@@ -548,7 +615,221 @@ public final class App {
             }
         }
 
-        void removeAllToys() { removeToys(-1); }
+        void removeAllToys() {
+            removeToys(-1);
+            raking = false;
+            if (rakeView != null) {
+                try { wm.removeView(rakeView); } catch (Exception ignored) {}
+                rakeView = null;
+            }
+            rakeH = 0;
+        }
+
+        private void removeToy(Toy t) {
+            try { wm.removeView(t.view); } catch (Exception ignored) {}
+            toys.remove(t);
+        }
+
+        /** Игрушка под пальцем (координаты слоя), чтобы полоска сугроба не мешала их трогать. */
+        Toy toyAt(float fx, float fy) {
+            for (int i = toys.size() - 1; i >= 0; i--) {
+                Toy t = toys.get(i);
+                float pad = 6 * d;
+                if (Math.abs(fx - t.x) <= t.hw + pad && Math.abs(fy - t.y) <= t.hh + pad) return t;
+            }
+            return null;
+        }
+
+        // ---------------- лепка из сугроба ----------------
+        private float maxPile() {
+            float m = 0;
+            for (float v : pile) if (v > m) m = v;
+            return m;
+        }
+
+        /** Полоска касаний над сугробом: высотой с сугроб, убирается, когда снега нет. */
+        private void updateRakeWindow() {
+            if (getWidth() == 0) return;
+            float mp = pileOn && ballsOn ? maxPile() : 0;
+            int want;
+            if (mp < 3 * d) want = 0;
+            else if (mp < 6 * d && rakeH == 0) want = 0;
+            else want = (int) Math.min(cap + 6 * d, mp + 6 * d);
+            if (raking && want < rakeH) want = rakeH;   // не трогаем окно посреди жеста
+            if (want == 0) {
+                if (rakeView != null && !raking) {
+                    try { wm.removeView(rakeView); } catch (Exception ignored) {}
+                    rakeView = null;
+                    rakeH = 0;
+                }
+                return;
+            }
+            if (rakeView != null && Math.abs(want - rakeH) < 4 * d) return;
+            rakeH = want;
+            if (rakeView == null) {
+                rakeView = new RakeView(getContext(), this);
+                rakeLp = new WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT, rakeH,
+                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                        PixelFormat.TRANSLUCENT);
+                rakeLp.gravity = Gravity.TOP | Gravity.START;
+                if (Build.VERSION.SDK_INT >= 28) {
+                    rakeLp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                }
+                rakeLp.x = Math.round(ox);
+                rakeLp.y = Math.round(oy + getHeight() - rakeH);
+                rakeLp.width = getWidth();
+                try { wm.addView(rakeView, rakeLp); } catch (Exception e) { rakeView = null; rakeH = 0; }
+            } else {
+                rakeLp.height = rakeH;
+                rakeLp.width = getWidth();
+                rakeLp.x = Math.round(ox);
+                rakeLp.y = Math.round(oy + getHeight() - rakeH);
+                try { wm.updateViewLayout(rakeView, rakeLp); } catch (Exception ignored) {}
+            }
+        }
+
+        boolean onRake(MotionEvent e) {
+            float fx = e.getRawX() - ox, fy = e.getRawY() - oy;
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    if (!ballsOn || !pileOn) return false;
+                    raking = true;
+                    rakeVol = 0;
+                    rake.type = Toy.BALL;
+                    rake.r = 0;
+                    rake.x = rakePrevX = rakeFx = fx;
+                    rakeFy = fy;
+                    rake.y = floorAt(fx);
+                    rakeSvx = rakeSvy = 0;
+                    rakeLastT = e.getEventTime();
+                    start();
+                    return true;
+                case MotionEvent.ACTION_MOVE: {
+                    float dt = (e.getEventTime() - rakeLastT) / 1000f;
+                    if (dt > 0.001f) {
+                        rakeSvx = rakeSvx * 0.5f + (fx - rakeFx) / dt * 0.5f;
+                        rakeSvy = rakeSvy * 0.5f + (fy - rakeFy) / dt * 0.5f;
+                    }
+                    rakeFx = fx;
+                    rakeFy = fy;
+                    rakeLastT = e.getEventTime();
+                    return true;
+                }
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    if (raking) finishRake();
+                    return true;
+            }
+            return false;
+        }
+
+        private void updateRake(float dt) {
+            if (!raking) return;
+            float maxR = 42 * d;
+            rake.x += (rakeFx - rake.x) * Math.min(1, dt * 18);
+            float speed = Math.abs(rake.x - rakePrevX) / Math.max(dt, 0.001f);
+            rakePrevX = rake.x;
+            float floor = floorAt(rake.x);
+            boolean low = rakeFy > floor - rake.r * 2 - 24 * d;
+            if (low) {
+                // катаем шар по сугробу: чем быстрее ведёшь, тем быстрее он растёт
+                if (rake.r < maxR) {
+                    float rate = Math.min(0.9f, (0.8f + speed / (50 * d)) * dt);
+                    float reach = Math.max(rake.r, 10 * d) + 8 * d;
+                    int k0 = idx(rake.x - reach), k1 = idx(rake.x + reach);
+                    for (int k = k0; k <= k1; k++) {
+                        float take = pile[k] * rate;
+                        pile[k] -= take;
+                        rakeVol += take * col;
+                    }
+                }
+                rake.r = Math.min(maxR, (float) Math.sqrt(rakeVol * 0.55f / Math.PI));
+                float ty = floorAt(rake.x) - rake.r;
+                rake.y += (ty - rake.y) * Math.min(1, dt * 20);
+            } else {
+                // подняли шар над сугробом: он идёт за пальцем, можно сразу бросить
+                rake.y += (rakeFy - rake.y) * Math.min(1, dt * 20);
+            }
+        }
+
+        private void finishRake() {
+            raking = false;
+            float minR = 11 * d;
+            if (rake.r < minR) {
+                // слишком мало снега: рассыпается обратно
+                returnSnow(rake.x, rake.r + 8 * d, rakeVol);
+                burst(rake.x, rake.y, Math.max(rake.r, 4 * d), 6);
+                rakeVol = 0;
+                return;
+            }
+            int balls = 0;
+            Toy oldest = null;
+            for (Toy t : toys) {
+                if (t.type != Toy.BALL) continue;
+                balls++;
+                if (oldest == null && t.face == 0 && t.body == 0 && !t.held) oldest = t;
+            }
+            if (balls >= MAX_BALLS) {
+                if (oldest == null) {
+                    returnSnow(rake.x, rake.r * 2, rakeVol);
+                    burst(rake.x, rake.y, rake.r, 20);
+                    rakeVol = 0;
+                    return;
+                }
+                shatter(oldest);
+                removeToy(oldest);
+            }
+            Toy t = new Toy();
+            t.type = Toy.BALL;
+            t.r = t.hw = t.hh = rake.r;
+            t.x = rake.x;
+            t.y = rake.y;
+            float lim = 2600 * d;
+            t.vx = Math.max(-lim, Math.min(lim, rakeSvx));
+            t.vy = Math.max(-lim, Math.min(lim, rakeSvy));
+            if (Math.hypot(t.vx, t.vy) > THROW_SPEED * d) t.thrown = true;
+            else { t.vx *= 0.3f; t.vy = Math.min(0, t.vy * 0.3f); }
+            rakeVol = 0;
+            addToy(t);
+            buzz(getContext(), 20);
+        }
+
+        /** Снег возвращается в сугроб вокруг точки. */
+        private void returnSnow(float cx, float half, float vol) {
+            if (!pileOn || vol <= 0) return;
+            int k0 = idx(cx - half), k1 = idx(cx + half);
+            float per = vol / col / (k1 - k0 + 1);
+            for (int k = k0; k <= k1; k++) pile[k] += per;
+        }
+
+        /** Облачко снежных крошек. */
+        private void burst(float cx, float cy, float r, int count) {
+            for (int q = 0; q < count && pn < PMAX; q++) {
+                int k = pn++;
+                double a = rnd.nextFloat() * Math.PI * 2;
+                float sp = (80 + rnd.nextFloat() * 320) * d;
+                px[k] = cx + (float) Math.cos(a) * r * 0.6f;
+                py[k] = cy + (float) Math.sin(a) * r * 0.6f;
+                pvx[k] = (float) Math.cos(a) * sp;
+                pvy[k] = (float) Math.sin(a) * sp - 140 * d;
+                pr[k] = (1.2f + rnd.nextFloat() * 2.6f) * d;
+                plife[k] = 0.7f + rnd.nextFloat() * 0.5f;
+                pcol[k] = 0xFFFFFFFF;
+                pfloat[k] = false;
+            }
+        }
+
+        /** Снежок разбился: крошки во все стороны, половина снега падает в сугроб. */
+        private void shatter(Toy t) {
+            if (t.dead) return;
+            t.dead = true;
+            burst(t.x, t.y, t.r, 16 + (int) (t.r / d));
+            returnSnow(t.x, t.r * 2.5f, (float) (Math.PI * t.r * t.r / 0.55f) * 0.5f);
+            buzz(getContext(), 25);
+        }
 
         /** Центр окна игрушки. Окно не уходит за экран, а сама игрушка может. */
         float winCenterX(Toy t) { return t.x; }
@@ -622,6 +903,7 @@ public final class App {
                 if (t.held) continue;
                 float s = floorAt(t.x);
                 if (t.y + t.hh >= s && t.vy >= 0) {
+                    if (t.thrown && t.vy > BREAK_SPEED * d) { shatter(t); continue; }
                     t.y = s - t.hh;
                     t.vy = t.vy > 320 * d ? -t.vy * 0.3f : 0;
                     t.vx *= (float) Math.pow(0.03, dt);
@@ -632,9 +914,17 @@ public final class App {
                 for (int i = 0; i < toys.size(); i++) {
                     for (int j = i + 1; j < toys.size(); j++) {
                         Toy a = toys.get(i), b = toys.get(j);
-                        if (a.type != Toy.BALL || b.type != Toy.BALL) continue;
+                        if (a.type != Toy.BALL || b.type != Toy.BALL || a.dead || b.dead) continue;
                         float dx = b.x - a.x, dy = b.y - a.y, dist = (float) Math.hypot(dx, dy), R = a.r + b.r;
                         if (dist >= R || dist < 0.01f) continue;
+                        float rel = (float) Math.hypot(a.vx - b.vx, a.vy - b.vy);
+                        if ((a.thrown || b.thrown) && rel > BREAK_SPEED * d) {
+                            // попадание снежком: брошенный разбивается, второй отлетает
+                            Toy hit = a.thrown ? a : b, other = hit == a ? b : a;
+                            if (!other.held) { other.vx += hit.vx * 0.45f; other.vy += hit.vy * 0.45f - 120 * d; }
+                            shatter(hit);
+                            continue;
+                        }
                         Toy lo = a, hi = b;
                         if (b.y > a.y) { lo = b; hi = a; }
                         boolean above = Math.abs(hi.x - lo.x) < lo.r * 0.8f && hi.y < lo.y;
@@ -656,6 +946,13 @@ public final class App {
                 }
             }
             for (Toy t : toys) {
+                if (t.dead) continue;
+                if (t.thrown && !t.held) {
+                    boolean wall = (t.x < t.hw && -t.vx > BREAK_SPEED * d) || (t.x > W - t.hw && t.vx > BREAK_SPEED * d)
+                            || (t.y < t.hh && -t.vy > BREAK_SPEED * d);
+                    if (wall) { shatter(t); continue; }
+                    if (Math.hypot(t.vx, t.vy) < 250 * d) t.thrown = false;
+                }
                 if (t.x < t.hw) { t.x = t.hw; t.vx = Math.abs(t.vx) * 0.4f; }
                 if (t.x > W - t.hw) { t.x = W - t.hw; t.vx = -Math.abs(t.vx) * 0.4f; }
                 if (!t.held && t.y < t.hh) { t.y = t.hh; t.vy = Math.abs(t.vy) * 0.3f; }
@@ -676,9 +973,10 @@ public final class App {
                     if (t.cola == 1 && rnd.nextFloat() < dt * 3) fizz(t, 1);
                 }
             }
+            for (int i = toys.size() - 1; i >= 0; i--) if (toys.get(i).dead) removeToy(toys.get(i));
             // снеговики
             int snowmen = 0;
-            for (Toy t : toys) { t.view.setTag(t.face * 10 + t.body); t.face = 0; t.body = 0; }
+            for (Toy t : toys) { t.face = 0; t.body = 0; }
             for (Toy t : toys) {
                 if (t.type != Toy.BALL || t.restOn == null) continue;
                 boolean supports = false;
@@ -692,8 +990,8 @@ public final class App {
                 snowmen++;
             }
             for (Toy t : toys) {
-                Object old = t.view.getTag();
-                if (!(old instanceof Integer) || (Integer) old != t.face * 10 + t.body) t.view.invalidate();
+                int look = t.face * 10 + t.body;
+                if (look != t.look) { t.look = look; t.view.invalidate(); }
             }
             if (snowmen > prevSnowmen) {
                 for (Toy t : toys) if (t.face > 0) say(t, "Снеговик готов! ☃️");
@@ -912,12 +1210,17 @@ public final class App {
         @Override
         public void doFrame(long now) {
             if (!running) return;
-            float dt = last == 0 ? 0.016f : Math.min(0.033f, (now - last) / 1e9f);
+            Choreographer.getInstance().postFrameCallback(this);
+            // не чаще 60 кадров в секунду даже на 90/120 Гц экранах,
+            // а когда ничего не движется (только гирлянда мигает), около 12 кадров
+            long gap = busy ? 14_000_000L : 80_000_000L;
+            if (last != 0 && now - last < gap) return;
+            float dt = last == 0 ? 0.016f : Math.min(busy ? 0.034f : 0.1f, (now - last) / 1e9f);
             last = now;
             if (++frameNo % 90 == 0) updateOffset();
+            if (frameNo % 20 == 0) updateRakeWindow();
             update(dt);
             invalidate();
-            Choreographer.getInstance().postFrameCallback(this);
         }
 
         private void update(float dt) {
@@ -960,6 +1263,7 @@ public final class App {
 
             if (pileOn) settle(dt);
             updateExcavators(dt);
+            updateRake(dt);
             updateToys(dt);
 
             int j = 0;
@@ -976,6 +1280,14 @@ public final class App {
                 }
                 j++;
             }
+
+            boolean b = n > 0 || pn > 0 || raking || !excs.isEmpty() || Math.abs(shakeKick) > d;
+            for (int q = 0; !b && q < toys.size(); q++) {
+                Toy t = toys.get(q);
+                b = t.held || t.sayT > 0 || t.tiltT > 0 || t.cola == 1 || !t.grounded
+                        || Math.abs(t.vx) > 2 * d || Math.abs(t.vy) > 2 * d;
+            }
+            busy = b;
         }
 
         private int idx(float xx) {
@@ -1021,6 +1333,8 @@ public final class App {
             for (Exc e : excs) drawExcavator(c, e, H);
             // руки и шапки снеговиков торчат за пределы окошек шариков, поэтому дорисовываем их здесь
             for (Toy t : toys) if (t.type == Toy.BALL && (t.face > 0 || t.body > 0)) drawBall(c, t, t.x, t.y, fillP, path);
+            // шар, который сейчас катают по сугробу
+            if (raking && rake.r > 1.5f * d) drawBall(c, rake, rake.x, rake.y, fillP, path);
             fillP.setShader(null);
             for (int i = 0; i < n; i++) if (front[i]) c.drawCircle(x[i], y[i], r[i], flakeP);
             for (int j = 0; j < pn; j++) {
@@ -1403,7 +1717,7 @@ public final class App {
             root.addView(sw("🎄 Гирлянда в строке состояния", "garland", true), lp(0, dp(6), 0, 0));
             root.addView(sw("Сугроб внизу экрана", "pile", true), lp(0, dp(6), 0, 0));
             root.addView(sw("🚜 Экскаваторы убирают снег", "excav", true), lp(0, dp(6), 0, 0));
-            root.addView(sw("☃️ Снежки для снеговика", "balls", true), lp(0, dp(6), 0, 0));
+            root.addView(sw("☃️ Лепить снежки из сугроба", "balls", true), lp(0, dp(6), 0, 0));
             root.addView(sw("🥤 Банка колы", "cola", true), lp(0, dp(6), 0, 0));
 
             Button exc = new Button(this);
@@ -1433,12 +1747,14 @@ public final class App {
             bat.setOnClickListener(v -> keepAliveSettings(true));
             root.addView(bat, lp(0, dp(10), 0, 0));
 
-            TextView tip = text("💡 Снежки: перетаскивай пальцем, ставь друг на друга, получится снеговик. Тап, и снежок подпрыгнет.\n\n"
+            TextView tip = text("☃️ Снежки лепятся из сугроба: проведи пальцем по снегу внизу экрана, и шар покатится и вырастет. "
+                    + "Отпусти, и снежок готов. Ставь снежки друг на друга, получится снеговик. Тап, и снежок подпрыгнет.\n\n"
+                    + "🎯 Брось снежок посильнее: он разобьётся о край экрана, о сугроб или о другой снежок и рассыплется.\n\n"
                     + "🥤 Кола: тап откроет банку, следующие тапы — глотки. Пустую банку тапни ещё раз, будет новая.\n\n"
                     + "🚜 Экскаваторы приезжают сами, когда навалит снега, или по кнопке в шторке.\n\n"
                     + "Опусти шторку, нажми ✏️ и добавь плитку «Снег», чтобы включать и выключать одним касанием. "
                     + "Снег, сугроб, гирлянда и экскаваторы не мешают нажимать, касания проходят сквозь них. "
-                    + "Снежки и кола ловят касания, чтобы их можно было трогать. Если мешают, отодвинь их или выключи переключателем.", 13, false);
+                    + "Снежки, кола и сам сугроб ловят касания, чтобы их можно было трогать. Если мешают, выключи их переключателем.", 13, false);
             tip.setGravity(Gravity.START);
             tip.setAlpha(0.85f);
             root.addView(tip, lp(0, dp(22), 0, 0));
