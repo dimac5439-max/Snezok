@@ -149,6 +149,7 @@ public final class App {
         int look = -1;       // что нарисовано в окне сейчас (лицо, туловище)
         RadialGradient shade;
         float shadeR;
+        Shader colaBody, colaCap;
         ToyView view;
         WindowManager.LayoutParams lp;
         int winW, winH, lastX = Integer.MIN_VALUE, lastY = Integer.MIN_VALUE;
@@ -224,47 +225,15 @@ public final class App {
         }
     }
 
-    public static class ToyView extends View {
-        final Toy t;
-        final SnowView owner;
-        final float d;
-        final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        final Path path = new Path();
-        final RectF rf = new RectF();
-        final Shader bodyShader, capShader;
-        float gdx, gdy, downX, downY, svx, svy;
-        long downT, lastT;
-        boolean moved;
-
-        ToyView(Context c, Toy t, SnowView owner) {
-            super(c);
-            this.t = t;
-            this.owner = owner;
-            d = getResources().getDisplayMetrics().density;
-            p.setTextAlign(Paint.Align.CENTER);
-            float w = 30 * d;
-            bodyShader = new LinearGradient(-w / 2, 0, w / 2, 0,
-                    new int[]{0xFF9E1626, 0xFFE8303F, 0xFFFF6A75, 0xFFC81E2E, 0xFF8A1220},
-                    new float[]{0f, 0.3f, 0.45f, 0.7f, 1f}, Shader.TileMode.CLAMP);
-            capShader = new LinearGradient(-w / 2, 0, w / 2, 0, 0xFF8E949E, 0xFFE9ECF1, Shader.TileMode.MIRROR);
-        }
-
-        @Override
-        public boolean hasOverlappingRendering() { return false; }
-
-        @Override
-        protected void onDraw(Canvas c) {
-            float cx = getWidth() / 2f, cy = getHeight() / 2f;
-            if (t.type == Toy.BALL) {
-                // в окне шарик может быть сдвинут, если окно упёрлось в край экрана
-                drawBall(c, t, cx + (t.x - owner.winCenterX(t)), cy + (t.y - owner.winCenterY(t)), p, path);
-            } else {
-                drawCola(c, cx + (t.x - owner.winCenterX(t)), cy + (t.y - owner.winCenterY(t)));
-            }
-        }
-
-        private void drawCola(Canvas c, float cx, float cy) {
+    /** Рисует банку колы с центром в (cx, cy). */
+    static void drawCola(Canvas c, Toy t, float cx, float cy, float d, Paint p, Path path, RectF rf) {
             float w = 30 * d, h = 54 * d;
+            if (t.colaBody == null) {
+                t.colaBody = new LinearGradient(-w / 2, 0, w / 2, 0,
+                        new int[]{0xFF9E1626, 0xFFE8303F, 0xFFFF6A75, 0xFFC81E2E, 0xFF8A1220},
+                        new float[]{0f, 0.3f, 0.45f, 0.7f, 1f}, Shader.TileMode.CLAMP);
+                t.colaCap = new LinearGradient(-w / 2, 0, w / 2, 0, 0xFF8E949E, 0xFFE9ECF1, Shader.TileMode.MIRROR);
+            }
             c.save();
             if (t.cola == 2) {
                 // смятая банка лежит на боку
@@ -297,7 +266,7 @@ public final class App {
             c.rotate(tilt);
             // корпус
             rf.set(-w / 2, -h / 2 + 4 * d, w / 2, h / 2);
-            p.setShader(bodyShader);
+            p.setShader(t.colaBody);
             c.drawRoundRect(rf, 5 * d, 5 * d, p);
             p.setShader(null);
             // белая волна
@@ -314,7 +283,7 @@ public final class App {
             p.setTypeface(Typeface.DEFAULT_BOLD);
             c.drawText("COLA", 0, -6 * d, p);
             // крышка
-            p.setShader(capShader);
+            p.setShader(t.colaCap);
             rf.set(-w / 2 + 2 * d, -h / 2, w / 2 - 2 * d, -h / 2 + 6 * d);
             c.drawRoundRect(rf, 3 * d, 3 * d, p);
             p.setShader(null);
@@ -341,6 +310,40 @@ public final class App {
             c.restore();
         }
 
+
+    public static class ToyView extends View {
+        final Toy t;
+        final SnowView owner;
+        final float d;
+        final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final Path path = new Path();
+        final RectF rf = new RectF();
+        float gdx, gdy, downX, downY, svx, svy;
+        long downT, lastT;
+        boolean moved;
+
+        ToyView(Context c, Toy t, SnowView owner) {
+            super(c);
+            this.t = t;
+            this.owner = owner;
+            d = getResources().getDisplayMetrics().density;
+            p.setTextAlign(Paint.Align.CENTER);
+        }
+
+        @Override
+        public boolean hasOverlappingRendering() { return false; }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            float cx = getWidth() / 2f, cy = getHeight() / 2f;
+            if (t.type == Toy.BALL) {
+                // в окне шарик может быть сдвинут, если окно упёрлось в край экрана
+                drawBall(c, t, cx + (t.x - owner.winCenterX(t)), cy + (t.y - owner.winCenterY(t)), p, path);
+            } else {
+                drawCola(c, t, cx + (t.x - owner.winCenterX(t)), cy + (t.y - owner.winCenterY(t)), d, p, path, rf);
+            }
+        }
+
         @Override
         public boolean onTouchEvent(MotionEvent e) {
             float rx = e.getRawX(), ry = e.getRawY();
@@ -355,6 +358,7 @@ public final class App {
                     downX = rx; downY = ry;
                     downT = lastT = e.getEventTime();
                     moved = false;
+                    owner.touchPlay();
                     owner.start();
                     return true;
                 case MotionEvent.ACTION_MOVE: {
@@ -488,6 +492,14 @@ public final class App {
         private int rakeH = 0;
         private boolean busy = true;
 
+        // Режим игры: только в нём снег, снежки и кола ловят касания.
+        // В остальное время всё рисуется в одном слое, сквозь который проходят все нажатия.
+        private static final long PLAY_MS = 30_000;
+        private boolean playing = false;
+        private long playUntil = 0, playStart = 0;
+        private final Paint colaP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path edge = new Path();
+
         public SnowView(Context c, WindowManager wm) {
             super(c);
             this.wm = wm;
@@ -506,6 +518,7 @@ public final class App {
             textP.setTextAlign(Paint.Align.CENTER);
             textP.setTypeface(Typeface.DEFAULT_BOLD);
             textP.setTextSize(14 * d);
+            colaP.setTextAlign(Paint.Align.CENTER);
         }
 
         void setPrefs(int level, boolean snowOn, int bright, boolean garland, boolean pileOn, boolean excavOn, boolean ballsOn, boolean colaOn) {
@@ -590,12 +603,21 @@ public final class App {
         }
 
         private void addToy(Toy t) {
-            t.view = new ToyView(getContext(), t, this);
             if (t.type == Toy.BALL) {
                 t.winW = t.winH = (int) Math.ceil(t.r * 2 + 4 * d);
             } else {
                 t.winW = t.winH = (int) (76 * d);
             }
+            toys.add(t);
+            if (playing) attach(t);
+        }
+
+        /** Своё окошко у игрушки есть только в режиме игры, чтобы её можно было трогать. */
+        private void attach(Toy t) {
+            if (t.view != null) return;
+            t.view = new ToyView(getContext(), t, this);
+            t.look = -1;
+            t.lastX = t.lastY = Integer.MIN_VALUE;
             WindowManager.LayoutParams lp = new WindowManager.LayoutParams(t.winW, t.winH,
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
@@ -612,15 +634,50 @@ public final class App {
             lp.y = Math.round(winCenterY(t) + oy - t.winH / 2f);
             try {
                 wm.addView(t.view, lp);
-                toys.add(t);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                t.view = null;
+            }
+        }
+
+        private void detach(Toy t) {
+            if (t.view == null) return;
+            try { wm.removeView(t.view); } catch (Exception ignored) {}
+            t.view = null;
+            t.held = false;
+        }
+
+        void play() {
+            long now = SystemClock.uptimeMillis();
+            playStart = now;
+            playUntil = now + PLAY_MS;
+            setPlay(true);
+            buzz(getContext(), 20);
+        }
+
+        void touchPlay() {
+            playUntil = Math.max(playUntil, SystemClock.uptimeMillis() + PLAY_MS);
+        }
+
+        private void setPlay(boolean on) {
+            if (on == playing) return;
+            playing = on;
+            for (Toy t : toys) { if (on) attach(t); else detach(t); }
+            updateRakeWindow();
+            start();
+            invalidate();
+        }
+
+        private void checkPlayTimeout() {
+            if (!playing || raking || SystemClock.uptimeMillis() < playUntil) return;
+            for (Toy t : toys) if (t.held) return;
+            setPlay(false);
         }
 
         private void removeToys(int type) {
             for (int i = toys.size() - 1; i >= 0; i--) {
                 Toy t = toys.get(i);
                 if (type >= 0 && t.type != type) continue;
-                try { wm.removeView(t.view); } catch (Exception ignored) {}
+                detach(t);
                 toys.remove(i);
             }
         }
@@ -636,7 +693,7 @@ public final class App {
         }
 
         private void removeToy(Toy t) {
-            try { wm.removeView(t.view); } catch (Exception ignored) {}
+            detach(t);
             toys.remove(t);
         }
 
@@ -660,7 +717,7 @@ public final class App {
         /** Полоска касаний над сугробом: высотой с сугроб, убирается, когда снега нет. */
         private void updateRakeWindow() {
             if (getWidth() == 0) return;
-            float mp = pileOn && ballsOn ? maxPile() : 0;
+            float mp = pileOn && ballsOn && playing ? maxPile() : 0;
             int want;
             if (mp < 3 * d) want = 0;
             else if (mp < 6 * d && rakeH == 0) want = 0;
@@ -706,6 +763,7 @@ public final class App {
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     if (!ballsOn || !pileOn) return false;
+                    touchPlay();
                     raking = true;
                     rakeVol = 0;
                     rake.type = Toy.BALL;
@@ -859,7 +917,7 @@ public final class App {
                 say(t, "Пшшш!");
                 fizz(t, 28);
                 buzz(getContext(), 0, 30, 30, 30, 30, 60);
-                t.view.invalidate();
+                if (t.view != null) t.view.invalidate();
             } else if (t.cola == 1) {
                 if (t.tiltT > 0) return;
                 t.tiltT = 1f;
@@ -874,7 +932,7 @@ public final class App {
                 t.y -= 20 * d;
                 say(t, "Новая банка 🥤");
                 buzz(getContext(), 20);
-                t.view.invalidate();
+                if (t.view != null) t.view.invalidate();
             }
         }
 
@@ -978,7 +1036,7 @@ public final class App {
                                 buzz(getContext(), 120);
                             }
                         }
-                        t.view.invalidate();
+                        if (t.view != null) t.view.invalidate();
                     }
                     if (t.cola == 1 && rnd.nextFloat() < dt * 3) fizz(t, 1);
                 }
@@ -1001,7 +1059,7 @@ public final class App {
             }
             for (Toy t : toys) {
                 int look = t.face * 10 + t.body;
-                if (look != t.look) { t.look = look; t.view.invalidate(); }
+                if (look != t.look && t.view != null) { t.look = look; t.view.invalidate(); }
             }
             if (snowmen > prevSnowmen) {
                 for (Toy t : toys) if (t.face > 0) say(t, "Снеговик готов! ☃️");
@@ -1010,6 +1068,7 @@ public final class App {
             prevSnowmen = snowmen;
             // двигаем окна
             for (Toy t : toys) {
+                if (t.view == null) continue;
                 int lx = Math.round(t.x + ox - t.winW / 2f), ly = Math.round(t.y + oy - t.winH / 2f);
                 if (lx != t.lastX || ly != t.lastY) {
                     t.lastX = lx; t.lastY = ly;
@@ -1228,7 +1287,7 @@ public final class App {
             float dt = last == 0 ? 0.016f : Math.min(busy ? 0.034f : 0.1f, (now - last) / 1e9f);
             last = now;
             if (++frameNo % 90 == 0) updateOffset();
-            if (frameNo % 20 == 0) updateRakeWindow();
+            if (frameNo % 20 == 0) { checkPlayTimeout(); updateRakeWindow(); }
             update(dt);
             invalidate();
         }
@@ -1291,7 +1350,7 @@ public final class App {
                 j++;
             }
 
-            boolean b = n > 0 || pn > 0 || raking || !excs.isEmpty() || Math.abs(shakeKick) > d;
+            boolean b = n > 0 || pn > 0 || raking || playing || !excs.isEmpty() || Math.abs(shakeKick) > d;
             for (int q = 0; !b && q < toys.size(); q++) {
                 Toy t = toys.get(q);
                 b = t.held || t.sayT > 0 || t.tiltT > 0 || t.cola == 1 || !t.grounded
@@ -1342,7 +1401,17 @@ public final class App {
             }
             for (Exc e : excs) drawExcavator(c, e, H);
             // руки и шапки снеговиков торчат за пределы окошек шариков, поэтому дорисовываем их здесь
-            for (Toy t : toys) if (t.type == Toy.BALL && (t.face > 0 || t.body > 0)) drawBall(c, t, t.x, t.y, fillP, path);
+            for (Toy t : toys) {
+                if (t.view == null) {
+                    // вне режима игры игрушки рисуются здесь и не мешают нажимать
+                    if (t.type == Toy.BALL) drawBall(c, t, t.x, t.y, fillP, path);
+                    else drawCola(c, t, t.x, t.y, d, colaP, path, rf);
+                } else if (t.type == Toy.BALL && (t.face > 0 || t.body > 0)) {
+                    drawBall(c, t, t.x, t.y, fillP, path);
+                }
+            }
+            fillP.setShader(null);
+            if (playing) drawPlayHint(c, W, H);
             // шар, который сейчас катают по сугробу
             if (raking && rake.r > 1.5f * d) drawBall(c, rake, rake.x, rake.y, fillP, path);
             fillP.setShader(null);
@@ -1367,6 +1436,34 @@ public final class App {
                 c.drawText(t.say, t.x, ty, textP);
             }
             fillP.setAlpha(255);
+        }
+
+        /** В режиме игры край сугроба светится, а в начале видна подсказка. */
+        private void drawPlayHint(Canvas c, float W, float H) {
+            if (pileOn && ballsOn) {
+                edge.reset();
+                for (int k = 0; k < pile.length; k++) {
+                    float ex = Math.min(k * col, W), ey = H - pile[k];
+                    if (k == 0) edge.moveTo(ex, ey); else edge.lineTo(ex, ey);
+                }
+                lineP.setStrokeWidth(2.5f * d);
+                lineP.setColor(0x9988CCFF);
+                c.drawPath(edge, lineP);
+            }
+            long since = SystemClock.uptimeMillis() - playStart;
+            if (since > 4000) return;
+            float a = Math.min(1, (4000 - since) / 600f);
+            String s = ballsOn && pileOn ? "☃️ Играем 30 сек: лепи снежки из сугроба" : "☃️ Играем 30 сек";
+            float ty = H - maxPile() - 40 * d;
+            float tw = textP.measureText(s) + 24 * d;
+            rf.set(W / 2 - tw / 2, ty - 20 * d, W / 2 + tw / 2, ty + 9 * d);
+            fillP.setColor(0xFFFFFFFF);
+            fillP.setAlpha((int) (235 * a));
+            c.drawRoundRect(rf, 14 * d, 14 * d, fillP);
+            fillP.setAlpha(255);
+            textP.setColor(0xFF1C1E3A);
+            textP.setAlpha((int) (255 * a));
+            c.drawText(s, W / 2, ty, textP);
         }
 
         private void drawGarland(Canvas c, float W) {
@@ -1414,6 +1511,7 @@ public final class App {
         static final String ACTION_UPDATE = "ru.opsel.snezhok.UPDATE";
         static final String ACTION_SHAKE = "ru.opsel.snezhok.SHAKE";
         static final String ACTION_EXCAV = "ru.opsel.snezhok.EXCAV";
+        static final String ACTION_PLAY = "ru.opsel.snezhok.PLAY";
         private static final String CHANNEL = "snow";
 
         static volatile boolean running = false;
@@ -1535,6 +1633,7 @@ public final class App {
             if (ACTION_UPDATE.equals(a)) applyPrefs();
             if (ACTION_SHAKE.equals(a) && view != null) view.shake();
             if (ACTION_EXCAV.equals(a) && view != null) view.callExcavators();
+            if (ACTION_PLAY.equals(a) && view != null) view.play();
             return START_STICKY;
         }
 
@@ -1557,7 +1656,7 @@ public final class App {
                     // нажатие на само уведомление выключает снег насовсем, до следующего включения вручную
                     .setContentIntent(action(ACTION_STOP, 1))
                     .setOngoing(true)
-                    .addAction(new Notification.Action.Builder(null, "Стряхнуть", action(ACTION_SHAKE, 2)).build())
+                    .addAction(new Notification.Action.Builder(null, "☃️ Поиграть", action(ACTION_PLAY, 2)).build())
                     .addAction(new Notification.Action.Builder(null, "🚜 Экскаватор", action(ACTION_EXCAV, 3)).build())
                     .addAction(new Notification.Action.Builder(null, "⚙️ Настройки", open).build())
                     .build();
@@ -1730,6 +1829,23 @@ public final class App {
             root.addView(sw("☃️ Лепить снежки из сугроба", "balls", true), lp(0, dp(6), 0, 0));
             root.addView(sw("🥤 Банка колы", "cola", true), lp(0, dp(6), 0, 0));
 
+            Button play = new Button(this);
+            play.setText("☃️ Поиграть со снегом");
+            play.setAllCaps(false);
+            play.setTextColor(Color.WHITE);
+            play.setTextSize(15);
+            play.setStateListAnimator(null);
+            play.setBackground(round(0xFF4F8BFF, dp(14)));
+            play.setOnClickListener(v -> {
+                if (SnowService.running) {
+                    startService(new Intent(this, SnowService.class).setAction(SnowService.ACTION_PLAY));
+                    moveTaskToBack(true);
+                } else {
+                    Toast.makeText(this, "Сначала включи снег", Toast.LENGTH_SHORT).show();
+                }
+            });
+            root.addView(play, lp(0, dp(14), 0, 0));
+
             Button exc = new Button(this);
             exc.setText("🚜 Вызвать экскаваторы");
             exc.setAllCaps(false);
@@ -1745,7 +1861,7 @@ public final class App {
                     Toast.makeText(this, "Сначала включи снег", Toast.LENGTH_SHORT).show();
                 }
             });
-            root.addView(exc, lp(0, dp(14), 0, 0));
+            root.addView(exc, lp(0, dp(10), 0, 0));
 
             Button bat = new Button(this);
             bat.setText("🔋 Чтобы снег не пропадал");
@@ -1757,14 +1873,16 @@ public final class App {
             bat.setOnClickListener(v -> keepAliveSettings(true));
             root.addView(bat, lp(0, dp(10), 0, 0));
 
-            TextView tip = text("☃️ Снежки лепятся из сугроба: проведи пальцем по снегу внизу экрана, и шар покатится и вырастет. "
+            TextView tip = text("✍️ Снег, сугроб, снежки и кола не мешают пользоваться телефоном: все нажатия проходят сквозь них.\n\n"
+                    + "☃️ Чтобы поиграть, нажми «Поиграть» в уведомлении или здесь. 30 секунд можно лепить и бросать снежки, "
+                    + "пить колу. Край сугроба в это время светится. Потом всё снова пропускает нажатия.\n\n"
+                    + "Снежки лепятся из сугроба: проведи пальцем по снегу внизу экрана, шар покатится и вырастет. "
                     + "Отпусти, и снежок готов. Ставь снежки друг на друга, получится снеговик. Тап, и снежок подпрыгнет.\n\n"
-                    + "🎯 Брось снежок посильнее: он разобьётся о край экрана, о сугроб или о другой снежок и рассыплется.\n\n"
+                    + "🎯 Брось снежок посильнее: он разобьётся о край экрана, о сугроб или о другой снежок.\n\n"
                     + "🥤 Кола: тап откроет банку, следующие тапы — глотки. Пустую банку тапни ещё раз, будет новая.\n\n"
                     + "🚜 Экскаваторы приезжают сами, когда навалит снега, или по кнопке в шторке.\n\n"
-                    + "Опусти шторку, нажми ✏️ и добавь плитку «Снег», чтобы включать и выключать одним касанием. "
-                    + "Снег, сугроб, гирлянда и экскаваторы не мешают нажимать, касания проходят сквозь них. "
-                    + "Снежки, кола и сам сугроб ловят касания, чтобы их можно было трогать. Если мешают, выключи их переключателем.", 13, false);
+                    + "Нажми на уведомление, чтобы выключить снег. Опусти шторку, нажми ✏️ и добавь плитку «Снег», "
+                    + "чтобы включать и выключать одним касанием.", 13, false);
             tip.setGravity(Gravity.START);
             tip.setAlpha(0.85f);
             root.addView(tip, lp(0, dp(22), 0, 0));
