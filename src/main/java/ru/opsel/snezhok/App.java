@@ -78,7 +78,6 @@ public final class App {
         static boolean excav(Context c) { return get(c, "excav", true); }
         static boolean balls(Context c) { return get(c, "balls", true); }
         static boolean cola(Context c) { return get(c, "cola", true); }
-        static boolean snow(Context c) { return get(c, "snow", true); }
         static int getInt(Context c, String k, int def) { return sp(c).getInt(k, def); }
         static void putInt(Context c, String k, int v) { sp(c).edit().putInt(k, v).apply(); }
     }
@@ -1508,7 +1507,7 @@ public final class App {
         }
 
         private void applyPrefs() {
-            if (view != null) view.setPrefs(Prefs.level(this), Prefs.snow(this), Prefs.getInt(this, "bright", 0),
+            if (view != null) view.setPrefs(Prefs.level(this), true, Prefs.getInt(this, "bright", 0),
                     Prefs.garland(this), Prefs.pile(this),
                     Prefs.excav(this), Prefs.balls(this), Prefs.cola(this));
         }
@@ -1712,9 +1711,7 @@ public final class App {
             root.addView(seg2, lp(0, 0, 0, 0));
 
             root.addView(text("Что показывать на экране", 15, true), lp(0, dp(20), 0, 0));
-            root.addView(sw("❄️ Падающий снег", "snow", true), lp(0, dp(10), 0, 0));
-
-            root.addView(sw("🎄 Гирлянда в строке состояния", "garland", true), lp(0, dp(6), 0, 0));
+            root.addView(sw("🎄 Гирлянда в строке состояния", "garland", true), lp(0, dp(10), 0, 0));
             root.addView(sw("Сугроб внизу экрана", "pile", true), lp(0, dp(6), 0, 0));
             root.addView(sw("🚜 Экскаваторы убирают снег", "excav", true), lp(0, dp(6), 0, 0));
             root.addView(sw("☃️ Лепить снежки из сугроба", "balls", true), lp(0, dp(6), 0, 0));
@@ -1795,7 +1792,19 @@ public final class App {
             Prefs.setOn(this, true);
             startForegroundService(new Intent(this, SnowService.class));
             big.postDelayed(this::refresh, 250);
-            keepAliveSettings(false);
+            // Настройки батареи больше не открываются сами: один раз подсказываем про кнопку
+            if (!Prefs.get(this, "batHint", false) && !ignoresBattery()) {
+                Prefs.put(this, "batHint", true);
+                Toast.makeText(this, "Если снег будет пропадать, нажми «🔋 Чтобы снег не пропадал» внизу",
+                        Toast.LENGTH_LONG).show();
+            }
+        }
+
+        private boolean ignoresBattery() {
+            try {
+                PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                return pm == null || pm.isIgnoringBatteryOptimizations(getPackageName());
+            } catch (Exception e) { return true; }
         }
 
         /** Просим систему не экономить батарею на Снежке, иначе она может его выключать. */
