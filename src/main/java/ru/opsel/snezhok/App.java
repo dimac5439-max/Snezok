@@ -1130,20 +1130,29 @@ public final class App {
                 // На Android 12+ касания проходят сквозь слой, только если его прозрачность не выше 0.8
                 lp.alpha = 0.8f;
             }
-            wm.addView(view, lp);
+            try {
+                wm.addView(view, lp);
+            } catch (Exception e) {
+                // окно не дали создать (например, разрешение отозвали прямо сейчас)
+                view = null;
+                Prefs.setOn(this, false);
+                stopSelf();
+                return;
+            }
             applyPrefs();
             view.start();
 
             sm = (SensorManager) getSystemService(SENSOR_SERVICE);
-            Sensor acc = sm != null ? sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) : null;
-            if (acc != null) sm.registerListener(this, acc, SensorManager.SENSOR_DELAY_GAME);
+            listenSensor(true);
 
             screenRx = new BroadcastReceiver() {
                 @Override
                 public void onReceive(Context c, Intent i) {
                     if (view == null) return;
-                    if (Intent.ACTION_SCREEN_OFF.equals(i.getAction())) view.stop();
-                    else view.start();
+                    // при выключенном экране не рисуем и не опрашиваем датчик, чтобы беречь батарею
+                    boolean off = Intent.ACTION_SCREEN_OFF.equals(i.getAction());
+                    if (off) view.stop(); else view.start();
+                    listenSensor(!off);
                 }
             };
             IntentFilter f = new IntentFilter();
@@ -1155,6 +1164,19 @@ public final class App {
 
             scheduleWatchdog(this);
             SnowTile.refresh(this);
+        }
+
+        private boolean sensorOn = false;
+
+        private void listenSensor(boolean on) {
+            if (sm == null || on == sensorOn) return;
+            if (on) {
+                Sensor acc = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+                if (acc != null) sensorOn = sm.registerListener(this, acc, SensorManager.SENSOR_DELAY_GAME);
+            } else {
+                sm.unregisterListener(this);
+                sensorOn = false;
+            }
         }
 
         /** Приложение смахнули из недавних: через секунду запускаемся снова. */
@@ -1229,7 +1251,7 @@ public final class App {
         @Override
         public void onDestroy() {
             running = false;
-            if (sm != null) sm.unregisterListener(this);
+            listenSensor(false);
             if (screenRx != null) {
                 try { unregisterReceiver(screenRx); } catch (Exception ignored) {}
             }
