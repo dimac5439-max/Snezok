@@ -101,12 +101,23 @@ public final class App {
         } catch (Exception ignored) {}
     }
 
+    /** Снег выключили: убираем будильник-проверку, чтобы ничего не включалось само. */
+    static void cancelWatchdog(Context c) {
+        try {
+            AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
+            PendingIntent pi = PendingIntent.getBroadcast(c, 10,
+                    new Intent(c, KeepAlive.class).setAction("ru.opsel.snezhok.CHECK"),
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_NO_CREATE);
+            if (pi != null) { am.cancel(pi); pi.cancel(); }
+        } catch (Exception ignored) {}
+    }
+
     /** Перезагрузка, обновление приложения, проверка по будильнику: включаем снег обратно. */
     public static class KeepAlive extends BroadcastReceiver {
         @Override
         public void onReceive(Context c, Intent i) {
             startIfWanted(c);
-            if (Prefs.on(c)) scheduleWatchdog(c);
+            if (Prefs.on(c)) scheduleWatchdog(c); else cancelWatchdog(c);
         }
     }
 
@@ -1542,12 +1553,13 @@ public final class App {
             Notification n = new Notification.Builder(this, CHANNEL)
                     .setSmallIcon(R.drawable.ic_snow)
                     .setContentTitle("Идёт снег ❄️")
-                    .setContentText("Стряхнуть, вызвать экскаваторы или выключить")
-                    .setContentIntent(open)
+                    .setContentText("Нажми, чтобы выключить снег")
+                    // нажатие на само уведомление выключает снег насовсем, до следующего включения вручную
+                    .setContentIntent(action(ACTION_STOP, 1))
                     .setOngoing(true)
                     .addAction(new Notification.Action.Builder(null, "Стряхнуть", action(ACTION_SHAKE, 2)).build())
                     .addAction(new Notification.Action.Builder(null, "🚜 Экскаватор", action(ACTION_EXCAV, 3)).build())
-                    .addAction(new Notification.Action.Builder(null, "Выключить", action(ACTION_STOP, 1)).build())
+                    .addAction(new Notification.Action.Builder(null, "⚙️ Настройки", open).build())
                     .build();
             if (Build.VERSION.SDK_INT >= 34) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
             else startForeground(1, n);
@@ -1574,6 +1586,7 @@ public final class App {
                 try { wm.removeView(view); } catch (Exception ignored) {}
                 view = null;
             }
+            if (!Prefs.on(this)) cancelWatchdog(this);
             SnowTile.refresh(this);
             super.onDestroy();
         }
